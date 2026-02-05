@@ -16,9 +16,9 @@ class DOMScanner {
       };
     } else if (this.hostname.includes('claude.ai')) {
       return {
-        // Claude selectors (approximate)
-        message: '.font-user-message, div[data-test-id="user-message"]',
-        content: '.font-user-message, div[data-test-id="user-message"]' 
+        // Claude selectors - 适配最新 Claude.ai 界面
+        message: '[data-testid="user-message"], .font-user-message, .user-message, [data-message-author-role="user"]',
+        content: '.font-user-message, [data-testid="user-message"] > div, .user-message-content'
       };
     } else if (this.hostname.includes('chat.deepseek.com')) {
        return {
@@ -47,6 +47,21 @@ class DOMScanner {
     // If specific selectors fail, try to be smarter or fallback
     let elements = document.querySelectorAll(this.selectors.message);
     
+    // Claude Fallback: Try alternative selectors if primary fails
+    if (elements.length === 0 && this.hostname.includes('claude.ai')) {
+      // Try to find user messages by looking for specific patterns
+      elements = document.querySelectorAll('div[class*="user"], div[data-testid*="user"]');
+      // Alternative: Look for message containers that don't have Claude's avatar
+      if (elements.length === 0) {
+        const allMessages = document.querySelectorAll('[data-testid="message"], .message');
+        elements = Array.from(allMessages).filter(el => {
+          // Filter out Claude's messages (they usually have specific attributes)
+          const isClaude = el.querySelector('[data-testid="assistant-message"], .font-claude-message, img[alt*="Claude"]');
+          return !isClaude;
+        });
+      }
+    }
+
     // Gemini Fallback: Scan for Angular/Material structure if simple selectors fail
     if (elements.length === 0 && this.hostname.includes('gemini.google.com')) {
       // Look for elements with 'data-message-id' that are NOT model responses
