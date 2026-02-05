@@ -135,32 +135,29 @@ class SidebarUI {
     this.listContainer = null;
     this.titleEl = null;
     this.searchInput = null;
+    this.resizeHandle = null;
+    this.isResizing = false;
+    this.sidebarWidth = 320;
+    this.isCollapsed = false;
     
     this.init();
   }
 
   async init() {
     await this.loadBookmarks();
-    const settings = await chrome.storage.local.get(['language', 'enabled']);
+    const settings = await chrome.storage.local.get(['language', 'enabled', 'sidebarWidth', 'sidebarCollapsed']);
     this.language = settings.language || 'zh';
     this.enabled = settings.enabled !== undefined ? settings.enabled : true;
+    this.sidebarWidth = settings.sidebarWidth || 320;
+    this.isCollapsed = settings.sidebarCollapsed || false;
     this.registerMessageListener();
     if (!this.enabled) return;
     this.mount();
   }
 
   createTrigger() {
-    const trigger = document.createElement('div');
-    trigger.id = 'ai-sidebar-trigger';
-    trigger.innerHTML = '≡';
-    trigger.style.display = 'none'; // Initially hidden if sidebar is open
-    trigger.addEventListener('click', () => this.toggle());
-    
-    // Append to shadow root as well so it shares styles? 
-    // Or maybe outside? If outside, it needs its own styles or be in shadow.
-    // Let's put it in shadow for isolation.
-    this.shadowRoot.appendChild(trigger);
-    this.triggerBtn = trigger;
+    // 不再创建悬浮按钮，使用 collapse-btn 代替
+    this.triggerBtn = null;
   }
 
   registerMessageListener() {
@@ -204,12 +201,27 @@ class SidebarUI {
 
     this.container = document.createElement('div');
     this.container.id = 'ai-sidebar-container';
+    this.container.style.width = `${this.sidebarWidth}px`;
+    
+    // Create resize handle
+    this.resizeHandle = document.createElement('div');
+    this.resizeHandle.className = 'resize-handle';
+    this.container.appendChild(this.resizeHandle);
+    
+    // Create collapse button (positioned on the left, vertically centered)
+    const collapseBtn = document.createElement('button');
+    collapseBtn.className = 'collapse-btn';
+    collapseBtn.id = 'collapse-btn';
+    collapseBtn.title = 'Collapse';
+    collapseBtn.innerHTML = '▶';
+    this.container.appendChild(collapseBtn);
     
     const header = document.createElement('div');
     header.className = 'header';
     header.innerHTML = `
-      <span class="title"><span class="title-text"></span></span>
-      <button class="toggle-btn" id="close-btn">×</button>
+      <div class="header-left">
+        <span class="title"><span class="title-text"></span></span>
+      </div>
     `;
     this.container.appendChild(header);
 
@@ -232,12 +244,21 @@ class SidebarUI {
     this.createTrigger();
     this.createTooltip();
 
-    this.shadowRoot.getElementById('close-btn').addEventListener('click', () => this.setEnabled(false));
+    // Event listeners
+    this.shadowRoot.getElementById('collapse-btn').addEventListener('click', () => this.toggleCollapse());
     this.searchInput.addEventListener('input', (e) => this.handleSearch(e.target.value));
+    
+    // Resize functionality
+    this.setupResizeHandlers();
 
     this.update();
     this.startObserver();
     this.startIntersectionObserver();
+    
+    // Apply collapsed state
+    if (this.isCollapsed) {
+      this.applyCollapseState();
+    }
   }
 
   unmount() {
@@ -253,6 +274,8 @@ class SidebarUI {
     this.searchInput = null;
     this.triggerBtn = null;
     this.tooltip = null;
+    this.resizeHandle = null;
+    this.isResizing = false;
   }
 
   getText(key) {
@@ -550,6 +573,76 @@ class SidebarUI {
       activeEl.classList.add('active');
       // Optional: Auto-scroll sidebar to keep active item in view
       // activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
+  setupResizeHandlers() {
+    if (!this.resizeHandle) return;
+    
+    const startResize = (e) => {
+      this.isResizing = true;
+      this.resizeHandle.classList.add('resizing');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      
+      const startX = e.clientX || e.touches[0].clientX;
+      const startWidth = this.container.offsetWidth;
+      
+      const doResize = (e) => {
+        if (!this.isResizing) return;
+        const currentX = e.clientX || (e.touches && e.touches[0].clientX);
+        const diff = startX - currentX;
+        const newWidth = Math.max(240, Math.min(600, startWidth + diff));
+        
+        this.container.style.width = `${newWidth}px`;
+        this.sidebarWidth = newWidth;
+      };
+      
+      const stopResize = () => {
+        if (!this.isResizing) return;
+        this.isResizing = false;
+        this.resizeHandle.classList.remove('resizing');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        
+        // Save width to storage
+        chrome.storage.local.set({ sidebarWidth: this.sidebarWidth });
+        
+        document.removeEventListener('mousemove', doResize);
+        document.removeEventListener('mouseup', stopResize);
+        document.removeEventListener('touchmove', doResize);
+        document.removeEventListener('touchend', stopResize);
+      };
+      
+      document.addEventListener('mousemove', doResize);
+      document.addEventListener('mouseup', stopResize);
+      document.addEventListener('touchmove', doResize);
+      document.addEventListener('touchend', stopResize);
+    };
+    
+    this.resizeHandle.addEventListener('mousedown', startResize);
+    this.resizeHandle.addEventListener('touchstart', startResize);
+  }
+
+  toggleCollapse() {
+    this.isCollapsed = !this.isCollapsed;
+    chrome.storage.local.set({ sidebarCollapsed: this.isCollapsed });
+    this.applyCollapseState();
+  }
+
+  applyCollapseState() {
+    if (!this.container) return;
+    
+    if (this.isCollapsed) {
+      this.container.classList.add('collapsed');
+      // Update collapse button icon (collapsed state: show left arrow to indicate expand direction)
+      const collapseBtn = this.shadowRoot.getElementById('collapse-btn');
+      if (collapseBtn) collapseBtn.innerHTML = '◀';
+    } else {
+      this.container.classList.remove('collapsed');
+      // Update collapse button icon (expanded state: show right arrow to indicate collapse direction)
+      const collapseBtn = this.shadowRoot.getElementById('collapse-btn');
+      if (collapseBtn) collapseBtn.innerHTML = '▶';
     }
   }
 }

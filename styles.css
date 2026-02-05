@@ -1,6 +1,8 @@
 :host {
   /* Dimensions & Spacing */
   --sidebar-width: 320px;
+  --sidebar-min-width: 240px;
+  --sidebar-max-width: 600px;
   --header-height: 60px;
   --padding-base: 16px;
   --radius-md: 12px;
@@ -62,7 +64,80 @@
   box-shadow: none;
 }
 
-/* Header */
+#ai-sidebar-container.collapsed .resize-handle {
+  display: none;
+}
+
+#ai-sidebar-container.collapsed .collapse-btn {
+  left: auto;
+  right: 100%;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Resize Handle */
+.resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 2147483649;
+  background: transparent;
+  transition: background-color 0.2s;
+}
+
+.resize-handle:hover,
+.resize-handle.resizing {
+  background-color: var(--accent-color);
+}
+
+/* Collapse Button */
+.collapse-btn {
+  position: absolute;
+  left: -24px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-right: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  width: 24px;
+  height: 48px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  font-size: 12px;
+  line-height: 1;
+  z-index: 2147483650;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+}
+
+.collapse-btn:hover {
+  background-color: var(--hover-bg);
+  color: var(--text-primary);
+  width: 28px;
+  left: -28px;
+}
+
+#ai-sidebar-container.collapsed .collapse-btn {
+  left: auto;
+  right: 100%;
+  border-right: 1px solid var(--border-subtle);
+  border-left: none;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+}
+
+#ai-sidebar-container.collapsed .collapse-btn:hover {
+  width: 28px;
+}
+
+/* Adjust header layout */
 .header {
   height: var(--header-height);
   padding: 0 var(--padding-base);
@@ -70,8 +145,14 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background-color: var(--bg-primary); /* Keep header primary or make it secondary? Let's make it primary for distinction */
-  backdrop-filter: blur(10px); 
+  background-color: var(--bg-primary);
+  backdrop-filter: blur(10px);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .title {
@@ -91,27 +172,6 @@
   height: 8px;
   background-color: var(--accent-color);
   border-radius: 50%;
-}
-
-.toggle-btn {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  color: var(--text-secondary);
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-  font-size: 20px;
-  line-height: 1;
-}
-
-.toggle-btn:hover {
-  background-color: var(--hover-bg);
-  color: var(--text-primary);
 }
 
 /* Search Box */
@@ -254,33 +314,6 @@
 
 .index-list::-webkit-scrollbar-thumb:hover {
   background-color: var(--text-secondary);
-}
-
-/* Toggle Trigger (Floating Button) */
-#ai-sidebar-trigger {
-  position: fixed;
-  top: 50%;
-  right: 20px;
-  width: 44px;
-  height: 44px;
-  background-color: var(--bg-primary);
-  border: 1px solid var(--border-subtle);
-  border-radius: 50%;
-  cursor: pointer;
-  z-index: 2147483646;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  color: var(--text-primary);
-  font-size: 20px;
-}
-
-#ai-sidebar-trigger:hover {
-  transform: scale(1.1);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
-  color: var(--accent-color);
 }
 
 /* Empty State / No Results */
