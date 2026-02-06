@@ -11,7 +11,6 @@
   "host_permissions": [
     "*://chatgpt.com/*",
     "*://claude.ai/*",
-    "*://chat.deepseek.com/*",
     "*://gemini.google.com/*"
   ],
   "content_scripts": [
@@ -19,7 +18,6 @@
       "matches": [
         "*://chatgpt.com/*",
         "*://claude.ai/*",
-        "*://chat.deepseek.com/*",
         "*://gemini.google.com/*"
       ],
       "js": ["content.js"],

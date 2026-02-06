@@ -20,12 +20,6 @@ class DOMScanner {
         message: '[data-testid="user-message"], .font-user-message, .user-message, [data-message-author-role="user"]',
         content: '.font-user-message, [data-testid="user-message"] > div, .user-message-content'
       };
-    } else if (this.hostname.includes('chat.deepseek.com')) {
-       return {
-        // DeepSeek selectors (generic guess, need verification)
-        message: '.ds-message-user', // Example
-        content: '.ds-message-content'
-      };
     } else if (this.hostname.includes('gemini.google.com')) {
       return {
         // Gemini selectors
@@ -109,11 +103,17 @@ class DOMScanner {
 const I18N = {
   zh: {
     title: '对话索引',
-    searchPlaceholder: '搜索提示词...'
+    searchPlaceholder: '搜索提示词...',
+    themeAuto: '自动',
+    themeLight: '浅色',
+    themeDark: '深色'
   },
   en: {
     title: 'Conversation Index',
-    searchPlaceholder: 'Search prompts...'
+    searchPlaceholder: 'Search prompts...',
+    themeAuto: 'Auto',
+    themeLight: 'Light',
+    themeDark: 'Dark'
   }
 };
 
@@ -139,17 +139,21 @@ class SidebarUI {
     this.isResizing = false;
     this.sidebarWidth = 320;
     this.isCollapsed = false;
+    this.themeMode = 'auto'; // 'auto', 'light', 'dark'
+    this.currentTheme = 'light';
+    this.themeObserver = null;
     
     this.init();
   }
 
   async init() {
     await this.loadBookmarks();
-    const settings = await chrome.storage.local.get(['language', 'enabled', 'sidebarWidth', 'sidebarCollapsed']);
+    const settings = await chrome.storage.local.get(['language', 'enabled', 'sidebarWidth', 'sidebarCollapsed', 'themeMode']);
     this.language = settings.language || 'zh';
     this.enabled = settings.enabled !== undefined ? settings.enabled : true;
     this.sidebarWidth = settings.sidebarWidth || 320;
     this.isCollapsed = settings.sidebarCollapsed || false;
+    this.themeMode = settings.themeMode || 'auto';
     this.registerMessageListener();
     if (!this.enabled) return;
     this.mount();
@@ -158,6 +162,157 @@ class SidebarUI {
   createTrigger() {
     // 不再创建悬浮按钮，使用 collapse-btn 代替
     this.triggerBtn = null;
+  }
+
+  detectPageTheme() {
+    // 使用多种方法综合判断页面是否为深色主题
+    const checks = [];
+    
+    // 1. 检查常见的深色模式类名
+    const darkClasses = ['dark', 'dark-mode', 'theme-dark', 'night-mode'];
+    const html = document.documentElement;
+    const body = document.body;
+    
+    darkClasses.forEach(cls => {
+      if (html.classList.contains(cls) || body.classList.contains(cls)) {
+        checks.push('dark');
+      }
+    });
+    
+    // 2. 检查 data-theme 属性
+    const themeAttr = html.getAttribute('data-theme') || body.getAttribute('data-theme');
+    if (themeAttr) {
+      checks.push(themeAttr);
+    }
+    
+    // 3. 检查 color-scheme
+    const colorScheme = getComputedStyle(html).colorScheme;
+    if (colorScheme && colorScheme !== 'normal') {
+      checks.push(colorScheme);
+    }
+    
+    // 4. 通过背景色亮度判断（备用方案）
+    try {
+      const bodyBg = getComputedStyle(body).backgroundColor;
+      const htmlBg = getComputedStyle(html).backgroundColor;
+      
+      // 解析 RGB 值
+      const parseColor = (color) => {
+        const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+        if (match) {
+          const r = parseInt(match[1]);
+          const g = parseInt(match[2]);
+          const b = parseInt(match[3]);
+          // 计算亮度 (0-255)
+          return (r * 0.299 + g * 0.587 + b * 0.114);
+        }
+        return null;
+      };
+      
+      const bodyLuma = parseColor(bodyBg);
+      const htmlLuma = parseColor(htmlBg);
+      
+      // 如果背景色较暗（亮度 < 128），认为是深色主题
+      if ((bodyLuma !== null && bodyLuma < 128) || (htmlLuma !== null && htmlLuma < 128)) {
+        checks.push('dark');
+      }
+    } catch (e) {
+      // 忽略颜色解析错误
+    }
+    
+    // 统计结果
+    const darkCount = checks.filter(c => c.includes('dark')).length;
+    const lightCount = checks.filter(c => c.includes('light')).length;
+    
+    // 如果没有任何检测结果，返回 light（默认）
+    if (checks.length === 0) return 'light';
+    
+    // 返回多数结果
+    return darkCount > lightCount ? 'dark' : 'light';
+  }
+
+  applyTheme(theme) {
+    this.currentTheme = theme;
+    if (this.container) {
+      this.container.setAttribute('data-theme', theme);
+    }
+  }
+
+  updateTheme() {
+    if (this.themeMode === 'auto') {
+      const pageTheme = this.detectPageTheme();
+      this.applyTheme(pageTheme);
+    } else {
+      this.applyTheme(this.themeMode);
+    }
+  }
+
+  startThemeObserver() {
+    // 监听页面主题变化
+    const observer = new MutationObserver((mutations) => {
+      if (this.themeMode !== 'auto') return;
+      
+      // 检查是否是主题相关的变化
+      const themeRelated = mutations.some(m => {
+        const attr = m.attributeName;
+        return attr === 'class' || attr === 'data-theme' || attr === 'style';
+      });
+      
+      if (themeRelated) {
+        // 使用防抖避免频繁更新
+        if (this.themeUpdateTimeout) {
+          clearTimeout(this.themeUpdateTimeout);
+        }
+        this.themeUpdateTimeout = setTimeout(() => {
+          this.updateTheme();
+        }, 100);
+      }
+    });
+    
+    // 监听 html 和 body 元素
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'data-theme', 'style']
+    });
+    
+    if (document.body) {
+      observer.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'data-theme', 'style']
+      });
+    }
+    
+    this.themeObserver = observer;
+    
+    // 初始检测（延迟执行，确保页面已加载）
+    setTimeout(() => {
+      this.updateTheme();
+    }, 500);
+  }
+
+  cycleTheme() {
+    const modes = ['auto', 'light', 'dark'];
+    const currentIndex = modes.indexOf(this.themeMode);
+    const nextIndex = (currentIndex + 1) % modes.length;
+    this.themeMode = modes[nextIndex];
+    
+    chrome.storage.local.set({ themeMode: this.themeMode });
+    this.updateTheme();
+    this.updateThemeButton();
+  }
+
+  updateThemeButton() {
+    const btn = this.shadowRoot?.getElementById('theme-btn');
+    if (btn) {
+      const t = this.i18n[this.language] || this.i18n.zh;
+      const labels = {
+        auto: t.themeAuto,
+        light: t.themeLight,
+        dark: t.themeDark
+      };
+      btn.textContent = labels[this.themeMode];
+      btn.title = `${t.themeAuto}/${t.themeLight}/${t.themeDark}`;
+    }
   }
 
   registerMessageListener() {
@@ -222,6 +377,7 @@ class SidebarUI {
       <div class="header-left">
         <span class="title"><span class="title-text"></span></span>
       </div>
+      <button class="theme-btn" id="theme-btn"></button>
     `;
     this.container.appendChild(header);
 
@@ -248,12 +404,17 @@ class SidebarUI {
     this.shadowRoot.getElementById('collapse-btn').addEventListener('click', () => this.toggleCollapse());
     this.searchInput.addEventListener('input', (e) => this.handleSearch(e.target.value));
     
+    // Theme toggle button
+    this.shadowRoot.getElementById('theme-btn').addEventListener('click', () => this.cycleTheme());
+    this.updateThemeButton();
+    
     // Resize functionality
     this.setupResizeHandlers();
 
     this.update();
     this.startObserver();
     this.startIntersectionObserver();
+    this.startThemeObserver();
     
     // Apply collapsed state
     if (this.isCollapsed) {
@@ -264,6 +425,7 @@ class SidebarUI {
   unmount() {
     if (this.domObserver) this.domObserver.disconnect();
     if (this.intersectionObserver) this.intersectionObserver.disconnect();
+    if (this.themeObserver) this.themeObserver.disconnect();
     if (this.visibleElements) this.visibleElements.clear();
     if (this.host && this.host.parentNode) this.host.parentNode.removeChild(this.host);
     this.host = null;
@@ -276,6 +438,7 @@ class SidebarUI {
     this.tooltip = null;
     this.resizeHandle = null;
     this.isResizing = false;
+    this.themeObserver = null;
   }
 
   getText(key) {
