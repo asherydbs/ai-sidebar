@@ -16,15 +16,9 @@ class DOMScanner {
       };
     } else if (this.hostname.includes('claude.ai')) {
       return {
-        // Claude selectors (approximate)
-        message: '.font-user-message, div[data-test-id="user-message"]',
-        content: '.font-user-message, div[data-test-id="user-message"]' 
-      };
-    } else if (this.hostname.includes('chat.deepseek.com')) {
-       return {
-        // DeepSeek selectors (generic guess, need verification)
-        message: '.ds-message-user', // Example
-        content: '.ds-message-content'
+        // Claude selectors - 适配最新 Claude.ai 界面
+        message: '[data-testid="user-message"], .font-user-message, .user-message, [data-message-author-role="user"]',
+        content: '.font-user-message, [data-testid="user-message"] > div, .user-message-content'
       };
     } else if (this.hostname.includes('gemini.google.com')) {
       return {
@@ -47,6 +41,21 @@ class DOMScanner {
     // If specific selectors fail, try to be smarter or fallback
     let elements = document.querySelectorAll(this.selectors.message);
     
+    // Claude Fallback: Try alternative selectors if primary fails
+    if (elements.length === 0 && this.hostname.includes('claude.ai')) {
+      // Try to find user messages by looking for specific patterns
+      elements = document.querySelectorAll('div[class*="user"], div[data-testid*="user"]');
+      // Alternative: Look for message containers that don't have Claude's avatar
+      if (elements.length === 0) {
+        const allMessages = document.querySelectorAll('[data-testid="message"], .message');
+        elements = Array.from(allMessages).filter(el => {
+          // Filter out Claude's messages (they usually have specific attributes)
+          const isClaude = el.querySelector('[data-testid="assistant-message"], .font-claude-message, img[alt*="Claude"]');
+          return !isClaude;
+        });
+      }
+    }
+
     // Gemini Fallback: Scan for Angular/Material structure if simple selectors fail
     if (elements.length === 0 && this.hostname.includes('gemini.google.com')) {
       // Look for elements with 'data-message-id' that are NOT model responses
@@ -94,11 +103,17 @@ class DOMScanner {
 const I18N = {
   zh: {
     title: '对话索引',
-    searchPlaceholder: '搜索提示词...'
+    searchPlaceholder: '搜索提示词...',
+    themeAuto: '自动',
+    themeLight: '浅色',
+    themeDark: '深色'
   },
   en: {
     title: 'Conversation Index',
-    searchPlaceholder: 'Search prompts...'
+    searchPlaceholder: 'Search prompts...',
+    themeAuto: 'Auto',
+    themeLight: 'Light',
+    themeDark: 'Dark'
   }
 };
 
@@ -120,32 +135,184 @@ class SidebarUI {
     this.listContainer = null;
     this.titleEl = null;
     this.searchInput = null;
+    this.resizeHandle = null;
+    this.isResizing = false;
+    this.sidebarWidth = 320;
+    this.isCollapsed = false;
+    this.themeMode = 'auto'; // 'auto', 'light', 'dark'
+    this.currentTheme = 'light';
+    this.themeObserver = null;
     
     this.init();
   }
 
   async init() {
     await this.loadBookmarks();
-    const settings = await chrome.storage.local.get(['language', 'enabled']);
+    const settings = await chrome.storage.local.get(['language', 'enabled', 'sidebarWidth', 'sidebarCollapsed', 'themeMode']);
     this.language = settings.language || 'zh';
     this.enabled = settings.enabled !== undefined ? settings.enabled : true;
+    this.sidebarWidth = settings.sidebarWidth || 320;
+    this.isCollapsed = settings.sidebarCollapsed || false;
+    this.themeMode = settings.themeMode || 'auto';
     this.registerMessageListener();
     if (!this.enabled) return;
     this.mount();
   }
 
   createTrigger() {
-    const trigger = document.createElement('div');
-    trigger.id = 'ai-sidebar-trigger';
-    trigger.innerHTML = '≡';
-    trigger.style.display = 'none'; // Initially hidden if sidebar is open
-    trigger.addEventListener('click', () => this.toggle());
+    // 不再创建悬浮按钮，使用 collapse-btn 代替
+    this.triggerBtn = null;
+  }
+
+  detectPageTheme() {
+    // 使用多种方法综合判断页面是否为深色主题
+    const checks = [];
     
-    // Append to shadow root as well so it shares styles? 
-    // Or maybe outside? If outside, it needs its own styles or be in shadow.
-    // Let's put it in shadow for isolation.
-    this.shadowRoot.appendChild(trigger);
-    this.triggerBtn = trigger;
+    // 1. 检查常见的深色模式类名
+    const darkClasses = ['dark', 'dark-mode', 'theme-dark', 'night-mode'];
+    const html = document.documentElement;
+    const body = document.body;
+    
+    darkClasses.forEach(cls => {
+      if (html.classList.contains(cls) || body.classList.contains(cls)) {
+        checks.push('dark');
+      }
+    });
+    
+    // 2. 检查 data-theme 属性
+    const themeAttr = html.getAttribute('data-theme') || body.getAttribute('data-theme');
+    if (themeAttr) {
+      checks.push(themeAttr);
+    }
+    
+    // 3. 检查 color-scheme
+    const colorScheme = getComputedStyle(html).colorScheme;
+    if (colorScheme && colorScheme !== 'normal') {
+      checks.push(colorScheme);
+    }
+    
+    // 4. 通过背景色亮度判断（备用方案）
+    try {
+      const bodyBg = getComputedStyle(body).backgroundColor;
+      const htmlBg = getComputedStyle(html).backgroundColor;
+      
+      // 解析 RGB 值
+      const parseColor = (color) => {
+        const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+        if (match) {
+          const r = parseInt(match[1]);
+          const g = parseInt(match[2]);
+          const b = parseInt(match[3]);
+          // 计算亮度 (0-255)
+          return (r * 0.299 + g * 0.587 + b * 0.114);
+        }
+        return null;
+      };
+      
+      const bodyLuma = parseColor(bodyBg);
+      const htmlLuma = parseColor(htmlBg);
+      
+      // 如果背景色较暗（亮度 < 128），认为是深色主题
+      if ((bodyLuma !== null && bodyLuma < 128) || (htmlLuma !== null && htmlLuma < 128)) {
+        checks.push('dark');
+      }
+    } catch (e) {
+      // 忽略颜色解析错误
+    }
+    
+    // 统计结果
+    const darkCount = checks.filter(c => c.includes('dark')).length;
+    const lightCount = checks.filter(c => c.includes('light')).length;
+    
+    // 如果没有任何检测结果，返回 light（默认）
+    if (checks.length === 0) return 'light';
+    
+    // 返回多数结果
+    return darkCount > lightCount ? 'dark' : 'light';
+  }
+
+  applyTheme(theme) {
+    this.currentTheme = theme;
+    if (this.container) {
+      this.container.setAttribute('data-theme', theme);
+    }
+  }
+
+  updateTheme() {
+    if (this.themeMode === 'auto') {
+      const pageTheme = this.detectPageTheme();
+      this.applyTheme(pageTheme);
+    } else {
+      this.applyTheme(this.themeMode);
+    }
+  }
+
+  startThemeObserver() {
+    // 监听页面主题变化
+    const observer = new MutationObserver((mutations) => {
+      if (this.themeMode !== 'auto') return;
+      
+      // 检查是否是主题相关的变化
+      const themeRelated = mutations.some(m => {
+        const attr = m.attributeName;
+        return attr === 'class' || attr === 'data-theme' || attr === 'style';
+      });
+      
+      if (themeRelated) {
+        // 使用防抖避免频繁更新
+        if (this.themeUpdateTimeout) {
+          clearTimeout(this.themeUpdateTimeout);
+        }
+        this.themeUpdateTimeout = setTimeout(() => {
+          this.updateTheme();
+        }, 100);
+      }
+    });
+    
+    // 监听 html 和 body 元素
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'data-theme', 'style']
+    });
+    
+    if (document.body) {
+      observer.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'data-theme', 'style']
+      });
+    }
+    
+    this.themeObserver = observer;
+    
+    // 初始检测（延迟执行，确保页面已加载）
+    setTimeout(() => {
+      this.updateTheme();
+    }, 500);
+  }
+
+  cycleTheme() {
+    const modes = ['auto', 'light', 'dark'];
+    const currentIndex = modes.indexOf(this.themeMode);
+    const nextIndex = (currentIndex + 1) % modes.length;
+    this.themeMode = modes[nextIndex];
+    
+    chrome.storage.local.set({ themeMode: this.themeMode });
+    this.updateTheme();
+    this.updateThemeButton();
+  }
+
+  updateThemeButton() {
+    const btn = this.shadowRoot?.getElementById('theme-btn');
+    if (btn) {
+      const t = this.i18n[this.language] || this.i18n.zh;
+      const labels = {
+        auto: t.themeAuto,
+        light: t.themeLight,
+        dark: t.themeDark
+      };
+      btn.textContent = labels[this.themeMode];
+      btn.title = `${t.themeAuto}/${t.themeLight}/${t.themeDark}`;
+    }
   }
 
   registerMessageListener() {
@@ -189,12 +356,28 @@ class SidebarUI {
 
     this.container = document.createElement('div');
     this.container.id = 'ai-sidebar-container';
+    this.container.style.width = `${this.sidebarWidth}px`;
+    
+    // Create resize handle
+    this.resizeHandle = document.createElement('div');
+    this.resizeHandle.className = 'resize-handle';
+    this.container.appendChild(this.resizeHandle);
+    
+    // Create collapse button (positioned on the left, vertically centered)
+    const collapseBtn = document.createElement('button');
+    collapseBtn.className = 'collapse-btn';
+    collapseBtn.id = 'collapse-btn';
+    collapseBtn.title = 'Collapse';
+    collapseBtn.innerHTML = '▶';
+    this.container.appendChild(collapseBtn);
     
     const header = document.createElement('div');
     header.className = 'header';
     header.innerHTML = `
-      <span class="title"><span class="title-text"></span></span>
-      <button class="toggle-btn" id="close-btn">×</button>
+      <div class="header-left">
+        <span class="title"><span class="title-text"></span></span>
+      </div>
+      <button class="theme-btn" id="theme-btn"></button>
     `;
     this.container.appendChild(header);
 
@@ -217,17 +400,32 @@ class SidebarUI {
     this.createTrigger();
     this.createTooltip();
 
-    this.shadowRoot.getElementById('close-btn').addEventListener('click', () => this.setEnabled(false));
+    // Event listeners
+    this.shadowRoot.getElementById('collapse-btn').addEventListener('click', () => this.toggleCollapse());
     this.searchInput.addEventListener('input', (e) => this.handleSearch(e.target.value));
+    
+    // Theme toggle button
+    this.shadowRoot.getElementById('theme-btn').addEventListener('click', () => this.cycleTheme());
+    this.updateThemeButton();
+    
+    // Resize functionality
+    this.setupResizeHandlers();
 
     this.update();
     this.startObserver();
     this.startIntersectionObserver();
+    this.startThemeObserver();
+    
+    // Apply collapsed state
+    if (this.isCollapsed) {
+      this.applyCollapseState();
+    }
   }
 
   unmount() {
     if (this.domObserver) this.domObserver.disconnect();
     if (this.intersectionObserver) this.intersectionObserver.disconnect();
+    if (this.themeObserver) this.themeObserver.disconnect();
     if (this.visibleElements) this.visibleElements.clear();
     if (this.host && this.host.parentNode) this.host.parentNode.removeChild(this.host);
     this.host = null;
@@ -238,6 +436,9 @@ class SidebarUI {
     this.searchInput = null;
     this.triggerBtn = null;
     this.tooltip = null;
+    this.resizeHandle = null;
+    this.isResizing = false;
+    this.themeObserver = null;
   }
 
   getText(key) {
@@ -535,6 +736,76 @@ class SidebarUI {
       activeEl.classList.add('active');
       // Optional: Auto-scroll sidebar to keep active item in view
       // activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
+  setupResizeHandlers() {
+    if (!this.resizeHandle) return;
+    
+    const startResize = (e) => {
+      this.isResizing = true;
+      this.resizeHandle.classList.add('resizing');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      
+      const startX = e.clientX || e.touches[0].clientX;
+      const startWidth = this.container.offsetWidth;
+      
+      const doResize = (e) => {
+        if (!this.isResizing) return;
+        const currentX = e.clientX || (e.touches && e.touches[0].clientX);
+        const diff = startX - currentX;
+        const newWidth = Math.max(240, Math.min(600, startWidth + diff));
+        
+        this.container.style.width = `${newWidth}px`;
+        this.sidebarWidth = newWidth;
+      };
+      
+      const stopResize = () => {
+        if (!this.isResizing) return;
+        this.isResizing = false;
+        this.resizeHandle.classList.remove('resizing');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        
+        // Save width to storage
+        chrome.storage.local.set({ sidebarWidth: this.sidebarWidth });
+        
+        document.removeEventListener('mousemove', doResize);
+        document.removeEventListener('mouseup', stopResize);
+        document.removeEventListener('touchmove', doResize);
+        document.removeEventListener('touchend', stopResize);
+      };
+      
+      document.addEventListener('mousemove', doResize);
+      document.addEventListener('mouseup', stopResize);
+      document.addEventListener('touchmove', doResize);
+      document.addEventListener('touchend', stopResize);
+    };
+    
+    this.resizeHandle.addEventListener('mousedown', startResize);
+    this.resizeHandle.addEventListener('touchstart', startResize);
+  }
+
+  toggleCollapse() {
+    this.isCollapsed = !this.isCollapsed;
+    chrome.storage.local.set({ sidebarCollapsed: this.isCollapsed });
+    this.applyCollapseState();
+  }
+
+  applyCollapseState() {
+    if (!this.container) return;
+    
+    if (this.isCollapsed) {
+      this.container.classList.add('collapsed');
+      // Update collapse button icon (collapsed state: show left arrow to indicate expand direction)
+      const collapseBtn = this.shadowRoot.getElementById('collapse-btn');
+      if (collapseBtn) collapseBtn.innerHTML = '◀';
+    } else {
+      this.container.classList.remove('collapsed');
+      // Update collapse button icon (expanded state: show right arrow to indicate collapse direction)
+      const collapseBtn = this.shadowRoot.getElementById('collapse-btn');
+      if (collapseBtn) collapseBtn.innerHTML = '▶';
     }
   }
 }
